@@ -1,8 +1,10 @@
 #ifndef ORB_FEATURE_DETECTOR_HPP_
 #define ORB_FEATURE_DETECTOR_HPP_
 
+#include <list>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
@@ -19,6 +21,37 @@ namespace jwko
     namespace orb_feature_detector
     {
 
+        // -------------------------------------------------------------------------
+        // ExtractorNode
+        // -------------------------------------------------------------------------
+        struct ExtractorNode
+        {
+            cv::Point2i UL, UR, BL, BR;
+            std::vector<cv::KeyPoint> vKeys;
+            std::list<ExtractorNode>::iterator lit;
+            bool bNoMore{false};
+
+            void DivideNode(ExtractorNode &n1, ExtractorNode &n2,
+                            ExtractorNode &n3, ExtractorNode &n4);
+        };
+
+        bool compareNodes(const std::pair<int, ExtractorNode *> &e1,
+                          const std::pair<int, ExtractorNode *> &e2);
+
+        std::vector<cv::KeyPoint> DistributeOctTree(
+            const std::vector<cv::KeyPoint> &vToDistributeKeys,
+            const int &minX, const int &maxX,
+            const int &minY, const int &maxY,
+            const int &N, const int &level);
+
+        std::vector<cv::KeyPoint> ComputeKeyPointsOctTree(
+            const cv::Mat &image,
+            int nfeatures, float scaleFactor, int nlevels,
+            int edgeThreshold, int iniThFAST, int minThFAST);
+
+        // -------------------------------------------------------------------------
+        // OrbFeatureDetector
+        // -------------------------------------------------------------------------
         class OrbFeatureDetector
         {
         public:
