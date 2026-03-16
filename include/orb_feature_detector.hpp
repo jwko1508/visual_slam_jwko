@@ -44,10 +44,14 @@ namespace jwko
             const int &minY, const int &maxY,
             const int &N, const int &level);
 
-        std::vector<cv::KeyPoint> ComputeKeyPointsOctTree(
+        // ORB-SLAM3 방식: 키포인트 검출 + 방향 계산 + 디스크립터까지 한 번에
+        // descriptors: CV_8UC1, (N x 32)
+        void ComputeORBFeatures(
             const cv::Mat &image,
             int nfeatures, float scaleFactor, int nlevels,
-            int edgeThreshold, int iniThFAST, int minThFAST);
+            int edgeThreshold, int iniThFAST, int minThFAST,
+            std::vector<cv::KeyPoint> &keypoints,
+            cv::Mat &descriptors);
 
         // -------------------------------------------------------------------------
         // OrbFeatureDetector
@@ -79,9 +83,6 @@ namespace jwko
             rclcpp_lifecycle::LifecycleNode *node_;
             jwko::image_subscriber::ImageSubscriber *img_sub_;
 
-            // ORB detector
-            cv::Ptr<cv::ORB> orb_detector_;
-
             // Publisher / Timer
             rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr feature_pub_;
             rclcpp::TimerBase::SharedPtr timer_;
@@ -96,11 +97,8 @@ namespace jwko
             float scale_factor_;
             int n_levels_;
             int edge_threshold_;
-            int first_level_;
-            int wta_k_;
-            int score_type_; // 0 = HARRIS_SCORE, 1 = FAST_SCORE
-            int patch_size_;
             int fast_threshold_;
+            float min_kp_dist_; // 크로스-레벨 최소 키포인트 거리 (픽셀, 0=비활성)
         };
 
     } // namespace orb_feature_detector

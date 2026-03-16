@@ -82,7 +82,7 @@ std::vector<cv::KeyPoint> jwko::orb_feature_detector::DistributeOctTree(
     using namespace jwko::orb_feature_detector;
 
     const int nIni = std::max(1,
-        static_cast<int>(round(static_cast<float>(maxX - minX) / (maxY - minY))));
+                              static_cast<int>(round(static_cast<float>(maxX - minX) / (maxY - minY))));
     const float hX = static_cast<float>(maxX - minX) / nIni;
 
     std::list<ExtractorNode> lNodes;
@@ -225,17 +225,195 @@ std::vector<cv::KeyPoint> jwko::orb_feature_detector::DistributeOctTree(
 }
 
 // =============================================================================
-// ComputeKeyPointsOctTree  (ORB-SLAM3 멤버 함수 -> standalone 포팅)
+// ComputeORBFeatures  (ORB-SLAM3 ORBextractor 방식 완전 이식)
+//
+// 원본과의 차이 수정:
+//  1. ComputePyramid: copyMakeBorder(BORDER_REFLECT_101) 방식 패딩 피라미드
+//  2. IC_Angle: intensity centroid 기반 키포인트 방향 계산
+//  3. computeOrbDescriptor: bit_pattern_31_ 기반 직접 디스크립터 계산
+//  4. 레벨별 GaussianBlur 후 디스크립터 계산 (level 좌표 그대로)
+//  5. 디스크립터 계산 완료 후 level-0 좌표 변환 (기존 코드는 이 순서가 반대)
 // =============================================================================
 
-std::vector<cv::KeyPoint> jwko::orb_feature_detector::ComputeKeyPointsOctTree(
+// ORB bit_pattern_31_ (512 포인트, ORB-SLAM3 원본 동일)
+static const int kBitPattern31[256 * 4] = {
+    8, -3, 9, 5, 4, 2, 7, -12, -11, 9, -8, 2, 7, -12, 12, -13,
+    2, -13, 2, 12, 1, -7, 1, 6, -2, -10, -2, -4, -13, -13, -11, -8,
+    -13, -3, -12, -9, 10, 4, 11, 9, -13, -8, -8, -9, -11, 7, -9, 12,
+    7, 7, 12, 6, -4, -5, -3, 0, -13, 2, -12, -3, -9, 0, -7, 5,
+    12, -6, 12, -1, -3, 6, -2, 12, -6, -13, -4, -8, 11, -13, 12, -8,
+    4, 7, 5, 1, -1, 3, 0, 7, 7, -8, 7, 3, -4, 2, -3, 7,
+    -7, -1, -6, 7, -13, -12, -8, -13, -7, -2, -6, -8, -8, 5, -6, -9,
+    -5, -1, -4, 5, -13, 7, -12, 12, 6, -25, 7, -24, -3, -16, -2, -10,
+    5, 1, 5, 5, 6, -5, 6, 5, 1, -11, 3, -11, -13, 3, -9, 4,
+    -10, -14, -9, -9, 12, 9, 13, 6, -7, 1, -7, 11, -3, -14, -1, -10,
+    5, -13, 7, -12, 2, -3, 3, 2, -5, -10, -4, -3, -4, -14, -4, -8,
+    -1, -3, 0, 3, -9, 8, -8, 3, -4, -3, -3, -13, 0, 2, 1, 7,
+    -3, 8, -3, -3, 2, 4, 3, 9, 9, -11, 10, -6, -9, 12, -8, 7,
+    2, -13, 3, -9, -1, -13, 2, -6, 8, 3, 9, -3, 1, -8, 2, -7,
+    5, 9, 6, 4, 0, -10, 0, -3, 12, 8, 13, 3, -5, -11, -5, -3,
+    -7, -3, -7, 4, -5, -5, -5, 6, -11, 0, -11, 6, 2, -8, 2, 4,
+    1, -13, 1, -8, 8, -13, 9, -12, 8, -1, 9, 4, -3, -2, -3, 6,
+    -5, 3, -5, 11, 7, -4, 8, -1, 1, -4, 3, -4, 5, -2, 6, -1,
+    -12, 6, -11, 1, -6, 2, -5, 9, -7, -5, -6, -3, -8, -7, -6, -4,
+    2, -2, 4, -1, -13, -12, -13, 0, -6, 5, -5, 8, 5, -6, 6, -3,
+    -2, 0, -2, 7, -1, -5, 0, 2, 7, -9, 9, -8, 3, -1, 5, -1,
+    -12, 8, -11, 5, -10, 3, -8, 1, -9, -3, -8, 5, 8, -1, 9, 4,
+    -12, -7, -10, -7, 5, 3, 6, 8, -2, -1, -1, 4, -9, -8, -9, -3,
+    10, 5, 12, 5, -3, 9, -2, -3, 1, -3, 2, 1, -13, -8, -10, -8,
+    -10, -5, -9, -2, 4, -4, 6, -2, 7, -8, 8, -9, -12, -1, -11, -1,
+    2, 3, 3, -1, -6, 6, -5, 4, -3, -1, -2, 9, -11, -1, -9, 4,
+    -6, -10, -5, -5, -12, -8, -9, -10, 3, -6, 5, -6, -4, -9, -2, -9,
+    10, -7, 11, -12, -1, 3, 0, 6, 3, -3, 5, 0, -6, -1, -5, -10,
+    -4, -12, -3, -9, 11, 7, 12, 11, 9, 4, 10, -3, 0, 0, 1, -5,
+    -13, -7, -12, -12, 2, 7, 3, 11, -6, -6, -5, -4, -4, 3, -3, 8,
+    5, -2, 7, -1, 7, 9, 8, 4, 8, -2, 9, 2, -3, -7, -3, 4,
+    0, -5, 0, 4, -11, -3, -10, 4, -4, 3, -3, 8, -3, -9, -3, -2,
+    -9, 0, -8, -5, 10, -9, 11, -6, -8, 4, -7, 9, 1, -2, 1, 4,
+    -6, 1, -5, 6, -3, -3, -2, -8, 11, 10, 12, 5, -12, 10, -11, 5,
+    -7, 11, -6, 7, -11, 3, -10, -1, 3, -9, 4, -5, 6, -10, 7, -8,
+    11, -6, 12, -12, 7, 5, 8, 0, -2, -6, -1, -1, -13, 11, -12, 5,
+    -6, -1, -5, 4, 7, 4, 8, -4, -13, 8, -11, 8, 1, -3, 2, 5,
+    5, 7, 6, 2, 9, -8, 9, 0, 1, 3, 2, -4, -1, -5, -1, 6,
+    4, 1, 4, 5, 4, -9, 4, -3, 1, -9, 2, -5, 2, -7, 3, -4,
+    -7, 5, -6, 2, -7, -11, -6, -6, 4, -8, 5, -5, 0, 2, 1, -1,
+    -12, 11, -11, 6, -2, -12, -2, 4, -1, -9, 0, -4, 8, 3, 9, -3,
+    -5, -11, -5, -5, -9, 5, -8, 10, 7, -11, 8, -8, 0, -13, 0, -6,
+    2, -11, 2, -5, -13, -7, -12, -12, 12, -4, 13, -1, -12, 0, -10, 0,
+    -7, 7, -6, 12, -9, 3, -8, -2, 3, -5, 4, 0, -9, -11, -9, -4,
+    4, -6, 4, 1, -6, -2, -5, 3, -12, -9, -11, -4, -7, 6, -6, 11,
+    2, -13, 3, -9, -13, 2, -12, -3, -3, -10, -2, -5, 0, 7, 1, 12,
+    -12, -3, -11, 2, 9, 1, 10, 6, -1, -6, 0, -1, -9, -1, -8, 4,
+    3, -10, 4, -7, 12, 2, 13, 7, 12, -4, 13, 1, 0, -3, 1, 2,
+    3, -7, 4, -4, -9, -11, -9, -3, 4, -7, 5, -3, -11, 2, -10, 7,
+    -12, -4, -12, 4, 10, 1, 11, 5, -13, -1, -12, 4, 8, -9, 9, -13,
+    -2, 6, -2, 12, -4, 7, -4, 13, -7, -5, -6, -9, -10, -2, -9, 3,
+    -8, -4, -6, -4, 11, -1, 12, 4, -9, -6, -8, -1, -1, -5, 0, 3,
+    -13, -2, -12, 3, -6, -10, -5, -7, -13, -8, -12, -3, 3, -4, 5, -3,
+    7, -10, 8, -6, 0, -13, 0, -7, 2, -1, 3, 4, -2, -9, -2, -3,
+    -13, 5, -12, 10, 3, 2, 4, 6, 12, -2, 12, 3, 10, 4, 11, 9,
+    -6, -1, -5, 4, -9, 0, -7, -1, 3, -13, 5, -13, -12, 7, -10, 7,
+    -7, -1, -7, 6, -6, -8, -4, -8, -6, 2, -5, 7, -3, 4, -2, -1,
+    8, 7, 9, 2, -3, 0, -2, 5, -5, -13, -3, -13, -9, 3, -7, 3,
+    -8, -3, -6, -3, -12, -11, -11, -6, 4, -9, 5, -5, 5, -1, 6, 4,
+    5, -10, 6, -6, 1, -4, 2, 0, 11, -9, 12, -5, 3, -1, 3, 5,
+    -6, 4, -5, 9, -11, 0, -10, 5, -13, -9, -11, -9, -9, -12, -8, -7,
+    -2, 3, -1, 8, -12, -4, -10, -4, 5, -5, 6, -1, 12, 9, 13, 4,
+    0, -7, 1, -3, 6, -3, 6, 2, 7, 5, 8, 9, -7, -8, -5, -8,
+    2, -11, 3, -7, 4, -1, 5, 4, 12, 0, 12, 5, 12, -10, 13, -6};
+
+static const int HALF_PATCH_SIZE = 15;
+
+static float IC_Angle(const cv::Mat &image, cv::Point2f pt, const std::vector<int> &u_max)
+{
+    int m_01 = 0, m_10 = 0;
+    const uchar *center = &image.at<uchar>(cvRound(pt.y), cvRound(pt.x));
+    for (int u = -HALF_PATCH_SIZE; u <= HALF_PATCH_SIZE; ++u)
+        m_10 += u * center[u];
+    int step = static_cast<int>(image.step1());
+    for (int v = 1; v <= HALF_PATCH_SIZE; ++v)
+    {
+        int v_sum = 0;
+        int d = u_max[v];
+        for (int u = -d; u <= d; ++u)
+        {
+            int val_plus = center[u + v * step];
+            int val_minus = center[u - v * step];
+            v_sum += (val_plus - val_minus);
+            m_10 += u * (val_plus + val_minus);
+        }
+        m_01 += v * v_sum;
+    }
+    return cv::fastAtan2(static_cast<float>(m_01), static_cast<float>(m_10));
+}
+
+static void computeOrbDescriptor(const cv::KeyPoint &kpt,
+                                 const cv::Mat &img,
+                                 const cv::Point *pattern,
+                                 uchar *desc)
+{
+    const float factorPI = static_cast<float>(CV_PI / 180.0);
+    float angle = kpt.angle * factorPI;
+    float a = cosf(angle), b = sinf(angle);
+    const uchar *center = &img.at<uchar>(cvRound(kpt.pt.y), cvRound(kpt.pt.x));
+    const int step = static_cast<int>(img.step);
+
+#define GET_VALUE(idx)                                               \
+    center[cvRound(pattern[idx].x * b + pattern[idx].y * a) * step + \
+           cvRound(pattern[idx].x * a - pattern[idx].y * b)]
+
+    for (int i = 0; i < 32; ++i, pattern += 16)
+    {
+        int t0, t1, val;
+        t0 = GET_VALUE(0);
+        t1 = GET_VALUE(1);
+        val = (t0 < t1);
+        t0 = GET_VALUE(2);
+        t1 = GET_VALUE(3);
+        val |= (t0 < t1) << 1;
+        t0 = GET_VALUE(4);
+        t1 = GET_VALUE(5);
+        val |= (t0 < t1) << 2;
+        t0 = GET_VALUE(6);
+        t1 = GET_VALUE(7);
+        val |= (t0 < t1) << 3;
+        t0 = GET_VALUE(8);
+        t1 = GET_VALUE(9);
+        val |= (t0 < t1) << 4;
+        t0 = GET_VALUE(10);
+        t1 = GET_VALUE(11);
+        val |= (t0 < t1) << 5;
+        t0 = GET_VALUE(12);
+        t1 = GET_VALUE(13);
+        val |= (t0 < t1) << 6;
+        t0 = GET_VALUE(14);
+        t1 = GET_VALUE(15);
+        val |= (t0 < t1) << 7;
+        desc[i] = static_cast<uchar>(val);
+    }
+#undef GET_VALUE
+}
+
+void jwko::orb_feature_detector::ComputeORBFeatures(
     const cv::Mat &image,
     int nfeatures, float scaleFactor, int nlevels,
-    int edgeThreshold, int iniThFAST, int minThFAST)
+    int edgeThreshold, int iniThFAST, int minThFAST,
+    std::vector<cv::KeyPoint> &keypoints,
+    cv::Mat &descriptors)
 {
     using namespace jwko::orb_feature_detector;
 
-    // 피라미드 레벨별 목표 피처 수 (ORB-SLAM3 동일 공식)
+    // --- 스케일 팩터 사전 계산 ---
+    std::vector<float> mvScaleFactor(nlevels);
+    std::vector<float> mvInvScaleFactor(nlevels);
+    mvScaleFactor[0] = 1.0f;
+    mvInvScaleFactor[0] = 1.0f;
+    for (int i = 1; i < nlevels; ++i)
+    {
+        mvScaleFactor[i] = mvScaleFactor[i - 1] * scaleFactor;
+        mvInvScaleFactor[i] = 1.0f / mvScaleFactor[i];
+    }
+
+    // --- umax 테이블 (IC_Angle용) ---
+    std::vector<int> umax(HALF_PATCH_SIZE + 1);
+    {
+        int vmax = cvFloor(HALF_PATCH_SIZE * std::sqrt(2.f) / 2 + 1);
+        int vmin = cvCeil(HALF_PATCH_SIZE * std::sqrt(2.f) / 2);
+        const double hp2 = static_cast<double>(HALF_PATCH_SIZE) * HALF_PATCH_SIZE;
+        for (int v = 0; v <= vmax; ++v)
+            umax[v] = cvRound(std::sqrt(hp2 - static_cast<double>(v) * v));
+        for (int v = HALF_PATCH_SIZE, v0 = 0; v >= vmin; --v)
+        {
+            while (umax[v0] == umax[v0 + 1])
+                ++v0;
+            umax[v] = v0++;
+        }
+    }
+
+    // --- bit_pattern_31_ 포인터 ---
+    const cv::Point *pattern = reinterpret_cast<const cv::Point *>(kBitPattern31);
+
+    // --- 레벨별 목표 피처 수 ---
     std::vector<int> mnFeaturesPerLevel(nlevels);
     {
         float factor = 1.0f / scaleFactor;
@@ -251,20 +429,34 @@ std::vector<cv::KeyPoint> jwko::orb_feature_detector::ComputeKeyPointsOctTree(
         mnFeaturesPerLevel[nlevels - 1] = std::max(nfeatures - sum, 0);
     }
 
-    // 이미지 피라미드 구축
+    // --- ORB-SLAM3 방식 피라미드 구축: EDGE_THRESHOLD 패딩 + BORDER_REFLECT_101 ---
     std::vector<cv::Mat> mvImagePyramid(nlevels);
-    mvImagePyramid[0] = image;
-    for (int level = 1; level < nlevels; ++level)
+    for (int level = 0; level < nlevels; ++level)
     {
-        float invScale = 1.0f / std::pow(scaleFactor, static_cast<float>(level));
-        cv::resize(image, mvImagePyramid[level],
-                   cv::Size(cvRound(image.cols * invScale),
-                            cvRound(image.rows * invScale)),
-                   0, 0, cv::INTER_LINEAR);
+        float scale = mvInvScaleFactor[level];
+        cv::Size sz(cvRound(static_cast<float>(image.cols) * scale),
+                    cvRound(static_cast<float>(image.rows) * scale));
+        cv::Size wholeSize(sz.width + edgeThreshold * 2, sz.height + edgeThreshold * 2);
+        cv::Mat temp(wholeSize, image.type());
+        mvImagePyramid[level] = temp(cv::Rect(edgeThreshold, edgeThreshold, sz.width, sz.height));
+
+        if (level != 0)
+        {
+            cv::resize(mvImagePyramid[level - 1], mvImagePyramid[level], sz, 0, 0, cv::INTER_LINEAR);
+            cv::copyMakeBorder(mvImagePyramid[level], temp,
+                               edgeThreshold, edgeThreshold, edgeThreshold, edgeThreshold,
+                               cv::BORDER_REFLECT_101 | cv::BORDER_ISOLATED);
+        }
+        else
+        {
+            cv::copyMakeBorder(image, temp,
+                               edgeThreshold, edgeThreshold, edgeThreshold, edgeThreshold,
+                               cv::BORDER_REFLECT_101);
+        }
     }
 
-    std::vector<cv::KeyPoint> allKeypoints;
-    allKeypoints.reserve(nfeatures * 2);
+    // --- 레벨별 키포인트 검출 (OctTree 균등화) + 방향 계산 ---
+    std::vector<std::vector<cv::KeyPoint>> allKeypoints(nlevels);
     const float W = 35.0f;
 
     for (int level = 0; level < nlevels; ++level)
@@ -311,7 +503,6 @@ std::vector<cv::KeyPoint> jwko::orb_feature_detector::ComputeKeyPointsOctTree(
                         .rowRange(static_cast<int>(iniY), static_cast<int>(maxY))
                         .colRange(static_cast<int>(iniX), static_cast<int>(maxX)),
                     vKeysCell, iniThFAST, true);
-
                 if (vKeysCell.empty())
                     cv::FAST(
                         mvImagePyramid[level]
@@ -328,26 +519,63 @@ std::vector<cv::KeyPoint> jwko::orb_feature_detector::ComputeKeyPointsOctTree(
             }
         }
 
-        // OctTree 균등 분포 -> mnFeaturesPerLevel[level] 개
-        std::vector<cv::KeyPoint> levelKps = DistributeOctTree(
+        // OctTree 균등 분포
+        allKeypoints[level] = DistributeOctTree(
             vToDistributeKeys,
             minBorderX, maxBorderX, minBorderY, maxBorderY,
             mnFeaturesPerLevel[level], level);
 
-        // level-0 좌표로 변환 후 octave / size 설정
-        const float sf = std::pow(scaleFactor, static_cast<float>(level));
-        const int scaledPatchSize = static_cast<int>(31 * sf);
-        for (auto &kp : levelKps)
+        // border offset + octave + size 설정 (아직 level 좌표)
+        const int scaledPatchSize = static_cast<int>(31 * mvScaleFactor[level]);
+        for (auto &kp : allKeypoints[level])
         {
-            kp.pt.x = (kp.pt.x + minBorderX) * sf;
-            kp.pt.y = (kp.pt.y + minBorderY) * sf;
+            kp.pt.x += minBorderX;
+            kp.pt.y += minBorderY;
             kp.octave = level;
             kp.size = static_cast<float>(scaledPatchSize);
         }
-        allKeypoints.insert(allKeypoints.end(), levelKps.begin(), levelKps.end());
+
+        // IC_Angle: 방향 계산 (level 이미지 좌표 기준)
+        for (auto &kp : allKeypoints[level])
+            kp.angle = IC_Angle(mvImagePyramid[level], kp.pt, umax);
     }
 
-    return allKeypoints;
+    // --- 레벨별 GaussianBlur → 직접 디스크립터 계산 → level-0 좌표 변환 ---
+    int totalKps = 0;
+    for (int level = 0; level < nlevels; ++level)
+        totalKps += static_cast<int>(allKeypoints[level].size());
+
+    keypoints.clear();
+    keypoints.reserve(totalKps);
+    descriptors = cv::Mat::zeros(totalKps, 32, CV_8UC1);
+
+    int offset = 0;
+    for (int level = 0; level < nlevels; ++level)
+    {
+        auto &levelKps = allKeypoints[level];
+        if (levelKps.empty())
+            continue;
+
+        // GaussianBlur (ORB-SLAM3 동일 파라미터)
+        cv::Mat workingMat = mvImagePyramid[level].clone();
+        cv::GaussianBlur(workingMat, workingMat, cv::Size(7, 7), 2, 2, cv::BORDER_REFLECT_101);
+
+        // 각 키포인트 디스크립터 계산 (level 좌표 기준)
+        for (int i = 0; i < static_cast<int>(levelKps.size()); ++i)
+            computeOrbDescriptor(levelKps[i], workingMat, pattern,
+                                 descriptors.ptr(offset + i));
+
+        // 이제 level-0 좌표로 변환
+        if (level != 0)
+        {
+            const float scale = mvScaleFactor[level];
+            for (auto &kp : levelKps)
+                kp.pt *= scale;
+        }
+
+        keypoints.insert(keypoints.end(), levelKps.begin(), levelKps.end());
+        offset += static_cast<int>(levelKps.size());
+    }
 }
 
 // =============================================================================
@@ -363,12 +591,9 @@ jwko::orb_feature_detector::OrbFeatureDetector::OrbFeatureDetector(
       timer_hz_(10.0),
       scale_factor_(1.2f),
       n_levels_(8),
-      edge_threshold_(31),
-      first_level_(0),
-      wta_k_(2),
-      score_type_(cv::ORB::HARRIS_SCORE),
-      patch_size_(31),
-      fast_threshold_(30)
+      edge_threshold_(19),
+      fast_threshold_(20),
+      min_kp_dist_(0.0f)
 {
     RCLCPP_INFO(rclcpp::get_logger("OrbFeatureDetector"),
                 "[%s] OrbFeatureDetector constructor called", instance_name_.c_str());
@@ -422,7 +647,8 @@ bool jwko::orb_feature_detector::OrbFeatureDetector::activate()
 
     auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::duration<double>(1.0 / timer_hz_));
-    timer_ = node_->create_wall_timer(period, [this]() { process(); });
+    timer_ = node_->create_wall_timer(period, [this]()
+                                      { process(); });
 
     RCLCPP_INFO(rclcpp::get_logger("OrbFeatureDetector"),
                 "[%s] OrbFeatureDetector activated (%.1f Hz)", instance_name_.c_str(), timer_hz_);
@@ -459,7 +685,6 @@ bool jwko::orb_feature_detector::OrbFeatureDetector::cleanup()
     }
 
     feature_pub_.reset();
-    orb_detector_.release();
 
     RCLCPP_INFO(rclcpp::get_logger("OrbFeatureDetector"),
                 "[%s] OrbFeatureDetector cleaned up", instance_name_.c_str());
@@ -478,7 +703,6 @@ bool jwko::orb_feature_detector::OrbFeatureDetector::shutdown()
     }
 
     feature_pub_.reset();
-    orb_detector_.release();
 
     RCLCPP_INFO(rclcpp::get_logger("OrbFeatureDetector"),
                 "[%s] OrbFeatureDetector shut down", instance_name_.c_str());
@@ -499,18 +723,14 @@ void jwko::orb_feature_detector::OrbFeatureDetector::setupParameters()
             instance_name_ + "/publish_topic",
             "visual_slam/" + instance_name_ + "/orb_features");
         frame_id_ = node_->declare_parameter<std::string>(
-            instance_name_ + "/frame_id",
-            instance_name_ + "_camera");
+            instance_name_ + "/frame_id", instance_name_ + "_camera");
         scale_factor_ = static_cast<float>(
             node_->declare_parameter<double>(instance_name_ + "/scale_factor", 1.2));
         n_levels_ = node_->declare_parameter<int>(instance_name_ + "/n_levels", 8);
-        edge_threshold_ = node_->declare_parameter<int>(instance_name_ + "/edge_threshold", 31);
-        first_level_ = node_->declare_parameter<int>(instance_name_ + "/first_level", 0);
-        wta_k_ = node_->declare_parameter<int>(instance_name_ + "/wta_k", 2);
-        score_type_ = node_->declare_parameter<int>(instance_name_ + "/score_type",
-                                                    static_cast<int>(cv::ORB::HARRIS_SCORE));
-        patch_size_ = node_->declare_parameter<int>(instance_name_ + "/patch_size", 31);
-        fast_threshold_ = node_->declare_parameter<int>(instance_name_ + "/fast_threshold", 30);
+        edge_threshold_ = node_->declare_parameter<int>(instance_name_ + "/edge_threshold", 19);
+        fast_threshold_ = node_->declare_parameter<int>(instance_name_ + "/fast_threshold", 20);
+        min_kp_dist_ = static_cast<float>(
+            node_->declare_parameter<double>(instance_name_ + "/min_kp_dist", 0.0));
     }
     else
     {
@@ -522,41 +742,25 @@ void jwko::orb_feature_detector::OrbFeatureDetector::setupParameters()
             node_->get_parameter(instance_name_ + "/scale_factor").as_double());
         n_levels_ = node_->get_parameter(instance_name_ + "/n_levels").as_int();
         edge_threshold_ = node_->get_parameter(instance_name_ + "/edge_threshold").as_int();
-        first_level_ = node_->get_parameter(instance_name_ + "/first_level").as_int();
-        wta_k_ = node_->get_parameter(instance_name_ + "/wta_k").as_int();
-        score_type_ = node_->get_parameter(instance_name_ + "/score_type").as_int();
-        patch_size_ = node_->get_parameter(instance_name_ + "/patch_size").as_int();
         fast_threshold_ = node_->get_parameter(instance_name_ + "/fast_threshold").as_int();
+        min_kp_dist_ = static_cast<float>(
+            node_->get_parameter(instance_name_ + "/min_kp_dist").as_double());
     }
 
     RCLCPP_INFO(rclcpp::get_logger("OrbFeatureDetector"),
                 "[%s] num_features=%d  scale_factor=%.2f  n_levels=%d  "
-                "edge_threshold=%d  first_level=%d  wta_k=%d  "
-                "score_type=%d  patch_size=%d  fast_threshold=%d  "
+                "edge_threshold=%d  fast_threshold=%d  min_kp_dist=%.1f  "
                 "timer_hz=%.1f  topic=%s",
                 instance_name_.c_str(),
                 num_features_, scale_factor_, n_levels_,
-                edge_threshold_, first_level_, wta_k_,
-                score_type_, patch_size_, fast_threshold_,
+                edge_threshold_, fast_threshold_, min_kp_dist_,
                 timer_hz_, publish_topic_.c_str());
 }
 
 bool jwko::orb_feature_detector::OrbFeatureDetector::initialize()
 {
-    // compute()만 사용: 검출은 ComputeKeyPointsOctTree 에서 직접 FAST 수행
-    orb_detector_ = cv::ORB::create(
-        num_features_,
-        scale_factor_,
-        n_levels_,
-        edge_threshold_,
-        first_level_,
-        wta_k_,
-        static_cast<cv::ORB::ScoreType>(score_type_),
-        patch_size_,
-        fast_threshold_);
-
     RCLCPP_INFO(rclcpp::get_logger("OrbFeatureDetector"),
-                "[%s] ORB detector created (max features: %d)",
+                "[%s] ORB extractor initialized (ORB-SLAM3 방식, max features: %d)",
                 instance_name_.c_str(), num_features_);
     return true;
 }
@@ -587,33 +791,73 @@ void jwko::orb_feature_detector::OrbFeatureDetector::process()
     else
         gray = color_image.clone();
 
-    // ORB-SLAM3 ComputeKeyPointsOctTree 방식:
-    // FAST 셀 검출 -> 레벨별 OctTree 균등화 -> level-0 좌표로 변환
-    std::vector<cv::KeyPoint> keypoints = ComputeKeyPointsOctTree(
-        gray, num_features_, scale_factor_, n_levels_,
-        edge_threshold_, fast_threshold_, 7);
-
-    // 균등화된 키포인트로 ORB 디스크립터 계산
+    // ORB-SLAM3 완전 이식:
+    // REFLECT_101 패딩 피라미드 → FAST+OctTree → IC_Angle → GaussianBlur → bit_pattern 디스크립터
+    // → 디스크립터 계산 완료 후 level-0 좌표 변환
+    std::vector<cv::KeyPoint> keypoints;
     cv::Mat descriptors;
-    orb_detector_->compute(gray, keypoints, descriptors);
+    ComputeORBFeatures(
+        gray, num_features_, scale_factor_, n_levels_,
+        edge_threshold_, fast_threshold_, 7,
+        keypoints, descriptors);
+
+    // (선택) 크로스-레벨 전역 최소 거리 필터: min_kp_dist_ > 0 이면 추가 스파스화
+    if (min_kp_dist_ > 0.0f)
+    {
+        std::sort(keypoints.begin(), keypoints.end(),
+                  [](const cv::KeyPoint &a, const cv::KeyPoint &b)
+                  { return a.response > b.response; });
+
+        const int gW = static_cast<int>(gray.cols / min_kp_dist_) + 1;
+        const int gH = static_cast<int>(gray.rows / min_kp_dist_) + 1;
+        std::vector<bool> occupied(gW * gH, false);
+        std::vector<int> keep_idx;
+        keep_idx.reserve(keypoints.size());
+
+        for (int i = 0; i < static_cast<int>(keypoints.size()); ++i)
+        {
+            int gx = std::min(static_cast<int>(keypoints[i].pt.x / min_kp_dist_), gW - 1);
+            int gy = std::min(static_cast<int>(keypoints[i].pt.y / min_kp_dist_), gH - 1);
+            if (!occupied[gy * gW + gx])
+            {
+                occupied[gy * gW + gx] = true;
+                keep_idx.push_back(i);
+            }
+        }
+
+        std::vector<cv::KeyPoint> filtered_kps;
+        cv::Mat filtered_desc(static_cast<int>(keep_idx.size()), 32, CV_8UC1);
+        filtered_kps.reserve(keep_idx.size());
+        for (int k = 0; k < static_cast<int>(keep_idx.size()); ++k)
+        {
+            filtered_kps.push_back(keypoints[keep_idx[k]]);
+            descriptors.row(keep_idx[k]).copyTo(filtered_desc.row(k));
+        }
+        keypoints = std::move(filtered_kps);
+        descriptors = std::move(filtered_desc);
+    }
 
     RCLCPP_DEBUG(rclcpp::get_logger("OrbFeatureDetector"),
                  "[%s] Detected %zu ORB keypoints",
                  instance_name_.c_str(), keypoints.size());
 
-    // 컬러 이미지 위에 키포인트를 점(point)으로 시각화
+    // 시각화: ORB-SLAM3 스타일 (5px 박스 + 2px 점)
     cv::Mat viz_image = color_image.clone();
+    const float r = 5.0f;
     for (const auto &kp : keypoints)
-        cv::circle(viz_image, kp.pt, 3, cv::Scalar(0, 255, 0), -1);
+    {
+        cv::Point2f pt1(kp.pt.x - r, kp.pt.y - r);
+        cv::Point2f pt2(kp.pt.x + r, kp.pt.y + r);
+        cv::rectangle(viz_image, pt1, pt2, cv::Scalar(0, 255, 0));
+        cv::circle(viz_image, kp.pt, 2, cv::Scalar(0, 255, 0), -1);
+    }
 
-    // 키포인트 수 텍스트 오버레이
     std::string text = "ORB keypoints: " + std::to_string(keypoints.size());
     cv::putText(viz_image, text,
                 cv::Point(10, 30),
                 cv::FONT_HERSHEY_SIMPLEX, 0.8,
                 cv::Scalar(0, 255, 0), 2);
 
-    // ROS 이미지 메시지로 변환 후 퍼블리시
     if (feature_pub_ && feature_pub_->is_activated())
     {
         auto msg = cv_bridge::CvImage(
